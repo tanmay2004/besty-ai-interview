@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: interview
+      POSTGRES_PASSWORD: interview_password
+      POSTGRES_DB: interview
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U interview"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  guest-api:
+    image: ghcr.io/bloomai/interview-mock-services:latest
+    command: node dist/guest-api.js
+    ports:
+      - "3001:3001"
+    environment:
+      PORT: "3001"
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-super_secret_key_123}
+      MODE: ${MODE:-}
+
+  webhook-sender:
+    image: ghcr.io/bloomai/interview-mock-services:latest
+    command: node dist/webhook-sender.js
+    depends_on:
+      - guest-api
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET:-super_secret_key_123}
+      GUEST_API_URL: http://guest-api:3001
+      MODE: ${MODE:-}
+
+volumes:
+  pgdata:
