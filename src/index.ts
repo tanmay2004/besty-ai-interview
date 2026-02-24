@@ -8,9 +8,10 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(express.static("public"));
 
 // Routes
-app.get("/", async (req: Request, res: Response) => {
+async function registerWebhook() {
   try {
     const response = await fetch("http://localhost:3001/webhooks/register", {
       method: "POST",
@@ -23,11 +24,104 @@ app.get("/", async (req: Request, res: Response) => {
     });
 
     const data = await response.json();
-    res.json(data);
+    console.log("Webhook registered: ", data);
   } catch (error) {
-    res.status(500).json({ error: "Failed to fetch from localhost:3001" });
+    console.log("Failed to register webhook");
   }
+}
+
+app.get("/reservations", async (req: Request, res: Response) => {
+    try {
+      const result = await pool.query(
+        "SELECT * FROM reservations ORDER BY created_at DESC"
+      );
+      res.json(result.rows);
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Failed to fetch reservations" });
+    }
 });
+
+async function fetchGuestFromAPI(guestId: string, retries = 5) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000); // 5s timeout
+  
+    try {
+        const response = await fetch(
+            `http://localhost:3001/guests/${guestId}`,
+            {
+                method: "GET",
+                signal: controller.signal
+            }
+        );
+  
+        clearTimeout(timeout);
+    
+        if (response.status === 404) {
+            throw new Error("Guest not found (404)");
+        }
+    
+        if (!response.ok) {
+            throw new Error(`Guest API error: ${response.status}`);
+        }
+    
+        return await response.json();
+  
+    } catch (error) {
+        clearTimeout(timeout);
+    
+        if (retries > 0) {
+            console.log("Retrying guest fetch...");
+            return fetchGuestFromAPI(guestId, retries - 1);
+        }
+    
+        throw error;
+    }
+}
+
+async function getGuestData(guestId: string) {
+    // 1️⃣ Check if guest exists in DB
+    const result = await pool.query(
+        `SELECT * FROM guests WHERE guest_id = $1`,
+        [guestId]
+    );
+  
+    if (result.rowCount === 0) {
+        const guestData = await fetchGuestFromAPI(guestId);
+    
+        const { id, firstName, lastName, email, phone } = guestData;
+    
+        // 2️⃣ Insert into DB
+        await pool.query(
+            `
+            INSERT INTO guests (
+                guest_id,
+                first_name,
+                last_name,
+                email,
+                phone
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            `,
+            [id, firstName, lastName, email, phone]
+        );
+    
+        console.log("Inserted new guest into DB");
+    
+        return {
+            id: id,
+            first_name: firstName,
+            last_name: lastName,
+            email: email,
+            phone: phone
+        };
+    } else {
+        console.log("Guest found in DB");
+
+        // 3️⃣ Return existing guest
+        return result.rows[0];
+    }
+}
 
 app.post("/webhooks", async (req: Request, res: Response) => {
     console.log("Webhook received for event type = " + req.body.event);
@@ -45,68 +139,119 @@ app.post("/webhooks", async (req: Request, res: Response) => {
     const webhookId = req.body.webhookId;
     const { reservationId, propertyId, guestId, status, checkIn, checkOut, numGuests, totalAmount, currency } = req.body.data;
 
-    console.log("Sending request to guests api");
+    const guestData = await getGuestData(guestId);
+    const { id, first_name, last_name, email, phone } = guestData;
 
-    const response = await fetch(`http://localhost:3001/guests/${guestId}`, {
-      method: "GET",
-    });
+    if (req.body.event == "reservation.created") {
+        console.log(`Writing reservation ${reservationId} to database...`);
 
-    if (!response.ok) {
-        return res.status(500).json({ error: "Failed to fetch guest" });
+        await pool.query(
+            `
+            INSERT INTO reservations (
+                reservation_id,
+                property_id,
+                guest_id,
+                status,
+                check_in,
+                check_out,
+                num_guests,
+                total_amount,
+                currency,
+                guest_first_name,
+                guest_last_name,
+                guest_email,
+                guest_phone,
+                webhook_id,
+                event_timestamp
+            )
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            `,
+            [
+                reservationId,
+                propertyId,
+                guestId,
+                status,
+                checkIn,
+                checkOut,
+                numGuests,
+                totalAmount,
+                currency,
+                first_name,
+                last_name,
+                email,
+                phone,
+                webhookId,
+                timestamp
+            ]
+        );
+        
+        console.log("✅ Reservation created successfully");
+    } else if (req.body.event == "reservation.updated") {
+        console.log(`Updating reservation ${reservationId} in database...`);
+
+        await pool.query(
+            `
+            UPDATE reservations
+            SET
+              property_id = $1,
+              guest_id = $2,
+              status = $3,
+              check_in = $4,
+              check_out = $5,
+              num_guests = $6,
+              total_amount = $7,
+              currency = $8,
+              guest_first_name = $9,
+              guest_last_name = $10,
+              guest_email = $11,
+              guest_phone = $12,
+              webhook_id = $13,
+              event_timestamp = $14
+            WHERE reservation_id = $15
+            `,
+            [
+              propertyId,
+              guestId,
+              status,
+              checkIn,
+              checkOut,
+              numGuests,
+              totalAmount,
+              currency,
+              first_name,
+              last_name,
+              email,
+              phone,
+              webhookId,
+              timestamp,
+              reservationId
+            ]
+        );
+        
+        console.log("✅ Reservation updated successfully");
+    } else if (req.body.event == "reservation.cancelled") {
+        console.log(`Deleting reservation ${reservationId} from database...`);
+
+        const result = await pool.query(
+            `
+            DELETE FROM reservations
+            WHERE reservation_id = $1
+            `,
+            [reservationId]
+        );
+
+        if (result.rowCount === 0) {
+            console.log("❌ No reservation found to delete");
+        } else {
+            console.log("✅ Reservation deleted successfully");
+        }
     }
-
-    const guestData = await response.json();
-    const { id, firstName, lastName, email, phone } = guestData;
-    console.log("Got guest data:", guestData);
-
-    console.log(`Writing reservation ${reservationId} to database..."`);
-
-    await pool.query(
-      `
-      INSERT INTO reservations (
-        reservation_id,
-        property_id,
-        guest_id,
-        status,
-        check_in,
-        check_out,
-        num_guests,
-        total_amount,
-        currency,
-        guest_first_name,
-        guest_last_name,
-        guest_email,
-        guest_phone,
-        webhook_id,
-        event_timestamp
-      )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-      `,
-      [
-        reservationId,
-        propertyId,
-        guestId,
-        status,
-        checkIn,
-        checkOut,
-        numGuests,
-        totalAmount,
-        currency,
-        firstName,
-        lastName,
-        email,
-        phone,
-        webhookId,
-        timestamp
-      ]
-    );
-
-    console.log("✅ Reservation stored successfully");
 });
 
 // Start server
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`✅ Server is running at http://localhost:${PORT}`);
+  await registerWebhook();
 });
 
 export default app;

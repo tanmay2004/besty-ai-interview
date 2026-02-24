@@ -18,3 +18,11 @@ CREATE TABLE reservations (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE guests (
+  guest_id VARCHAR(50) PRIMARY KEY NOT NULL,
+  first_name VARCHAR(100),
+  last_name VARCHAR(100),
+  email VARCHAR(255),
+  phone VARCHAR(50)
+)

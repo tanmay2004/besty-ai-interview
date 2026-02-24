@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Reservations</title>
+  <!-- <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script> -->
+</head>
+<body>
+  <h2>Reservations</h2>
+  <button>Send a Message</button><br><br>
+  <table border="1" id="table">
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Property</th>
+        <th>Guest</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    // const socket = io("http://localhost:3000");
+
+    async function loadReservations() {
+      const res = await fetch("http://localhost:3000/reservations");
+      const data = await res.json();
+      render(data);
+    }
+
+    function render(rows) {
+      const tbody = document.querySelector("tbody");
+      tbody.innerHTML = "";
+      rows.forEach(r => {
+        const row = `
+          <tr>
+            <td>${r.reservation_id}</td>
+            <td>${r.property_id}</td>
+            <td>${r.guest_first_name + " " + r.guest_last_name}</td>
+            <td>${r.status}</td>
+          </tr>
+        `;
+        tbody.innerHTML += row;
+      });
+    }
+
+    // socket.on("reservation_created", () => {
+    //   loadReservations();
+    // });
+
+    loadReservations();
+
+    setInterval(loadReservations, 3000);
+  </script>
+</body>
+</html>
