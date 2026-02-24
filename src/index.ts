@@ -131,9 +131,12 @@ app.post("/send_message", async (req: Request, res: Response) => {
             const resp = await response.json();
             console.log(resp);
         } catch (error) {
-            retryQueue.push(
-                
-            );
+            retryQueue.push({
+                guestId,
+                message: req.body.msg,
+                attempts: 1,
+                nextRetry: Date.now() + 2000
+              });
             console.error(error);
             console.log(`Failed to send message to guest ${guestId}`);
         }
