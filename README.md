@@ -43,3 +43,6 @@ At the end of the challenge, you should have a github repo that djsurry@gmail.co
 ## Notes
 
 You're expected to fully understand all the logic in your solution and be prepared to answer questions after the fact. You'll be asked to explain your reasoning behind your design decisions. The problem is meant to be very challenging so it's not an automatic fail if you run out of time. Your solution should be built to scale, or you should at least be able to concretely define how you would scale it.
+
+# Running Instructions
+```npm run dev```
