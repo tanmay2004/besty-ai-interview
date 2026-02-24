@@ -2,55 +2,143 @@
 <html>
 <head>
   <title>Reservations</title>
-  <!-- <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script> -->
+  <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
 </head>
 <body>
   <h2>Reservations</h2>
-  <button>Send a Message</button><br><br>
+  <input type="radio" name="status" value="confirmed" />
+    Confirmed
+  </label>
+
+  <label>
+    <input type="radio" name="status" value="modified" />
+    Modified
+  </label>
+
+  <label>
+    <input type="radio" name="status" value="cancelled" />
+    Cancelled
+  </label>
+  <br><br>
+  <form id="messageForm">
+    <input id="messageInput" placeholder="Enter a Message"></input>
+    <button type="submit">Send</button>
+  </form>
+  <br>
   <table border="1" id="table">
     <thead>
       <tr>
-        <th>ID</th>
-        <th>Property</th>
-        <th>Guest</th>
+        <th>Reservation ID</th>
+        <th>Property ID</th>
+        <th>Guest ID</th>
         <th>Status</th>
+        <th>Check In</th>
+        <th>Check Out</th>
+        <th># Guests</th>
+        <th>Total Amount</th>
+        <th>Currency</th>
+        <th>First Name</th>
+        <th>Last Name</th>
+        <th>Email</th>
+        <th>Phone</th>
       </tr>
     </thead>
     <tbody></tbody>
   </table>
 
   <script>
-    // const socket = io("http://localhost:3000");
+    const socket = io("http://localhost:3000");
+
+    socket.on("connect", () => {
+        console.log("Connected to server:", socket.id);
+    });
+
+    var guestIds = [];
 
     async function loadReservations() {
-      const res = await fetch("http://localhost:3000/reservations");
-      const data = await res.json();
-      render(data);
+        const selected = document.querySelector('input[name="status"]:checked');
+        const val = selected ? selected.value : '';
+        
+        const response = await fetch("http://localhost:3000/reservations", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ 
+                status: val
+            })
+        });
+
+        const data = await response.json();
+        render(data);
     }
 
     function render(rows) {
+      guestIds = [];
       const tbody = document.querySelector("tbody");
       tbody.innerHTML = "";
       rows.forEach(r => {
         const row = `
-          <tr>
-            <td>${r.reservation_id}</td>
-            <td>${r.property_id}</td>
-            <td>${r.guest_first_name + " " + r.guest_last_name}</td>
-            <td>${r.status}</td>
-          </tr>
+        <tr>
+            <td>${r.reservation_id ?? ""}</td>
+            <td>${r.property_id ?? ""}</td>
+            <td>${r.guest_id ?? ""}</td>
+            <td>${r.status ?? ""}</td>
+            <td>${r.check_in ?? ""}</td>
+            <td>${r.check_out ?? ""}</td>
+            <td>${r.num_guests ?? ""}</td>
+            <td>${r.total_amount ?? ""}</td>
+            <td>${r.currency ?? ""}</td>
+            <td>${r.guest_first_name ?? ""}</td>
+            <td>${r.guest_last_name ?? ""}</td>
+            <td>${r.guest_email ?? ""}</td>
+            <td>${r.guest_phone ?? ""}</td>
+        </tr>
         `;
         tbody.innerHTML += row;
+        guestIds.push(r.guest_id);
       });
     }
 
-    // socket.on("reservation_created", () => {
-    //   loadReservations();
-    // });
+    socket.on("update", () => {
+        console.log("Update received!");
+        loadReservations();
+    });
 
     loadReservations();
 
-    setInterval(loadReservations, 3000);
+    // setInterval(loadReservations, 3000);
+
+    const form = document.getElementById("messageForm");
+    const input = document.getElementById("messageInput");
+
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault(); // 🚨 stop page reload
+
+        const message = input.value.trim();
+        if (!message) return;
+
+        try {
+            const response = await fetch("http://localhost:3000/send_message", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({ 
+                    msg: message,
+                    guests: guestIds,
+                })
+            });
+
+            const data = await response.json();
+            console.log("Server response:", data);
+
+            input.value = ""; // clear input after send
+            alert("Messages sent successfully!");
+        } catch (err) {
+            console.error("Error sending message:", err);
+        }
+    });
   </script>
 </body>
 </html>

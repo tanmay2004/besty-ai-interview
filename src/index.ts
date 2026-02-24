@@ -1,9 +1,16 @@
 import express from "express";
 import type { Request, Response } from "express";
 import { pool } from "./db";
+import { createServer } from "http";
+import { Server } from "socket.io";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+const server = createServer(app);
+const io = new Server(server, {
+  cors: { origin: "*" }
+});
 
 // Middleware
 app.use(express.json());
@@ -30,16 +37,45 @@ async function registerWebhook() {
   }
 }
 
-app.get("/reservations", async (req: Request, res: Response) => {
+app.post("/reservations", async (req: Request, res: Response) => {
     try {
-      const result = await pool.query(
-        "SELECT * FROM reservations ORDER BY created_at DESC"
-      );
-      res.json(result.rows);
+        var query = "SELECT * FROM reservations ORDER BY created_at DESC"
+        if (req.body.status != "") {
+            query = `SELECT * FROM reservations WHERE status = '${req.body.status}' ORDER BY created_at DESC`
+        }
+        const result = await pool.query(query);
+        res.json(result.rows);
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ error: "Failed to fetch reservations" });
+        console.error(error);
+        res.status(500).json({ error: "Failed to fetch reservations" });
     }
+});
+
+app.post("/send_message", async (req: Request, res: Response) => {
+    for (const guestId of req.body.guests) {
+        try {
+            const response = await fetch(`http://localhost:3001/guests/${guestId}/messages`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    message: req.body.msg
+                })
+            });
+
+            const resp = await response.json();
+            console.log(resp);
+        } catch (error) {
+            console.error(error);
+            console.log(`Failed to send message to guest ${guestId}`);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    console.log("Successfully sent messages to all guests!");
+    res.status(200).json( {status: "Messages sent!"} );
 });
 
 async function fetchGuestFromAPI(guestId: string, retries = 5) {
@@ -66,7 +102,6 @@ async function fetchGuestFromAPI(guestId: string, retries = 5) {
         }
     
         return await response.json();
-  
     } catch (error) {
         clearTimeout(timeout);
     
@@ -246,12 +281,14 @@ app.post("/webhooks", async (req: Request, res: Response) => {
             console.log("✅ Reservation deleted successfully");
         }
     }
+
+    io.emit("update");
 });
 
-// Start server
-app.listen(PORT, async () => {
-  console.log(`✅ Server is running at http://localhost:${PORT}`);
-  await registerWebhook();
+// start
+server.listen(PORT, async () => {
+    console.log(`✅ Server is running at http://localhost:${PORT}`);
+    await registerWebhook();
 });
 
 export default app;
