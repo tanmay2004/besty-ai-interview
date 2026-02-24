@@ -51,6 +51,70 @@ app.post("/reservations", async (req: Request, res: Response) => {
     }
 });
 
+type RetryJob = {
+    guestId: string;
+    message: string;
+    attempts: number;
+    nextRetry: number; // timestamp
+  };
+  
+const retryQueue: RetryJob[] = [];
+
+const MAX_ATTEMPTS = 5;
+
+async function processRetryQueue() {
+    while (true) {
+      if (retryQueue.length === 0) {
+        // No jobs, wait a bit before checking again
+        await new Promise(res => setTimeout(res, 500));
+        continue;
+      }
+  
+      const job = retryQueue.shift()!; // remove first job from queue
+      const now = Date.now();
+  
+      if (job.nextRetry > now) {
+        // Not ready yet, push it back at the end
+        retryQueue.push(job);
+        // Wait a bit before next iteration to avoid busy loop
+        await new Promise(res => setTimeout(res, 500));
+        continue;
+      }
+  
+      try {
+        console.log(`Retrying guest ${job.guestId} (attempt ${job.attempts + 1})`);
+  
+        const response = await fetch(
+          `http://localhost:3001/guests/${job.guestId}/messages`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: job.message }),
+          }
+        );
+  
+        if (!response.ok) {
+          throw new Error(`Retry failed: ${response.status}`);
+        }
+  
+        console.log(`✅ Retry succeeded for ${job.guestId}`);
+        // Success → do not push back
+  
+      } catch (err) {
+        job.attempts++;
+  
+        if (job.attempts >= MAX_ATTEMPTS) {
+          console.log(`❌ Giving up on ${job.guestId}`);
+        } else {
+          const delay = Math.pow(2, job.attempts) * 1000; // exponential backoff
+          job.nextRetry = Date.now() + delay;
+          console.log(`⏳ Will retry ${job.guestId} in ${delay}ms`);
+          retryQueue.push(job); // push back at the end
+        }
+      }
+    }
+}
+
 app.post("/send_message", async (req: Request, res: Response) => {
     for (const guestId of req.body.guests) {
         try {
@@ -67,11 +131,14 @@ app.post("/send_message", async (req: Request, res: Response) => {
             const resp = await response.json();
             console.log(resp);
         } catch (error) {
+            retryQueue.push(
+                
+            );
             console.error(error);
             console.log(`Failed to send message to guest ${guestId}`);
         }
 
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 2000)); // wait 2 seconds
     }
 
     console.log("Successfully sent messages to all guests!");
@@ -179,48 +246,53 @@ app.post("/webhooks", async (req: Request, res: Response) => {
 
     if (req.body.event == "reservation.created") {
         console.log(`Writing reservation ${reservationId} to database...`);
-
-        await pool.query(
-            `
-            INSERT INTO reservations (
-                reservation_id,
-                property_id,
-                guest_id,
-                status,
-                check_in,
-                check_out,
-                num_guests,
-                total_amount,
-                currency,
-                guest_first_name,
-                guest_last_name,
-                guest_email,
-                guest_phone,
-                webhook_id,
-                event_timestamp
-            )
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-            `,
-            [
-                reservationId,
-                propertyId,
-                guestId,
-                status,
-                checkIn,
-                checkOut,
-                numGuests,
-                totalAmount,
-                currency,
-                first_name,
-                last_name,
-                email,
-                phone,
-                webhookId,
-                timestamp
-            ]
-        );
         
-        console.log("✅ Reservation created successfully");
+        try {
+            await pool.query(
+                `
+                INSERT INTO reservations (
+                    reservation_id,
+                    property_id,
+                    guest_id,
+                    status,
+                    check_in,
+                    check_out,
+                    num_guests,
+                    total_amount,
+                    currency,
+                    guest_first_name,
+                    guest_last_name,
+                    guest_email,
+                    guest_phone,
+                    webhook_id,
+                    event_timestamp
+                )
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+                ON CONFLICT (reservation_id) DO NOTHING;
+                `,
+                [
+                    reservationId,
+                    propertyId,
+                    guestId,
+                    status,
+                    checkIn,
+                    checkOut,
+                    numGuests,
+                    totalAmount,
+                    currency,
+                    first_name,
+                    last_name,
+                    email,
+                    phone,
+                    webhookId,
+                    timestamp
+                ]
+            );
+
+            console.log("✅ Reservation created successfully");
+        } catch (error) {
+            console.error("Unexpected DB error:", error);
+        }
     } else if (req.body.event == "reservation.updated") {
         console.log(`Updating reservation ${reservationId} in database...`);
 
@@ -289,6 +361,7 @@ app.post("/webhooks", async (req: Request, res: Response) => {
 server.listen(PORT, async () => {
     console.log(`✅ Server is running at http://localhost:${PORT}`);
     await registerWebhook();
+    processRetryQueue();
 });
 
 export default app;
